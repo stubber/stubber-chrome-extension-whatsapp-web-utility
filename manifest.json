@@ -3,7 +3,7 @@
   "name": "Stubber WhatsApp Web Utility",
   "version": "1.0",
   "description": "Toggle visibility of the chat bar in WhatsApp Web.",
-  "permissions": ["activeTab", "scripting"],
+  "permissions": [],
   "background": {
     "service_worker": "background.js"
   },
