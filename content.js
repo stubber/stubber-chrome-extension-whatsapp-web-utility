@@ -24,7 +24,7 @@ waitForElement("._ajv7._ajv8._ajvb", (targetDiv) => {
   toggleButton.innerHTML = svgHTML + "&nbsp;"; // Combine SVG and text
 
   toggleButton.onclick = function () {
-    const divsToHide = document.querySelectorAll("._aigv._aigw");
+    const divsToHide = document.querySelectorAll("._aigw");
     divsToHide.forEach((div) => {
       div.style.display = div.style.display === "none" ? "" : "none";
     });
