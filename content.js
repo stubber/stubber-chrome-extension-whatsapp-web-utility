@@ -2,8 +2,12 @@ const TOGGLE_ID = "stubber-whatsapp-sidebar-toggle";
 const TOGGLE_HOST_ID = "stubber-whatsapp-sidebar-toggle-host";
 const HIDDEN_ATTR = "data-stubber-sidebar-hidden";
 const PREV_STYLE_ATTR = "data-stubber-prev-style";
-const KNOWN_SIDEBAR_SELECTOR =
-  ".x9f619.x1n2onr6.x5yr21d.x17dzmu4.x1i1dayz.x2ipvbc.xjdofhw.x78zum5.xdt5ytf.x12xzxwr.x1plvlek.xryxfnj.x570efc.x18dvir5.xxljpkc.x18pi947.xck4lzl.x1gluznb.xahwd2o.x10fiusa.x1a0bplq.xc995h1";
+
+// Stable hooks in WhatsApp Web's DOM (verified Nov 2026). Obfuscated class names
+// change on every deploy, so we only rely on ids, data-testid and data-* attributes.
+const CHAT_LIST_SELECTOR = "#side, #pane-side";
+const LEFT_DRAWER_SELECTOR = "[data-testid='drawer-left']";
+const NAV_ITEM_SELECTOR = "[data-navbar-item]";
 
 const state = {
   sidebarHidden: false,
@@ -14,7 +18,21 @@ function normalizeLabel(value) {
   return (value || "").trim().toLowerCase();
 }
 
+// The vertical nav rail on the far left (Chats, Calls, Status, ...). It is a
+// header[data-testid='chatlist-header'], but so is the "WhatsApp" title bar inside
+// the chat list, so identify it by the navbar items it contains.
+function findNavRail() {
+  const navItem = document.querySelector(NAV_ITEM_SELECTOR);
+  const rail = navItem?.closest("header");
+  return rail instanceof HTMLElement ? rail : null;
+}
+
 function findChatListHeader() {
+  const rail = findNavRail();
+  if (rail) {
+    return rail;
+  }
+
   const header = document.querySelector("header[data-testid='chatlist-header']");
   return header instanceof HTMLElement ? header : null;
 }
@@ -52,18 +70,6 @@ function findSecondaryHeaderButton() {
   }
 
   return null;
-}
-
-function findChatsAnchor() {
-  const chatsButton = findChatsButton();
-  if (chatsButton) {
-    return chatsButton;
-  }
-
-  return Array.from(document.querySelectorAll("[aria-label]")).find((element) => {
-    const label = normalizeLabel(element.getAttribute("aria-label"));
-    return label === "chats" || label === "chat list";
-  });
 }
 
 function isLikelySidebar(element) {
@@ -106,12 +112,27 @@ function findTopmostLikelySidebar(startElement) {
   return candidate;
 }
 
-function findSidebarFromAnchor() {
-  return findTopmostLikelySidebar(findChatsAnchor());
-}
+// Layout: the nav rail, the sidebar column (title header + #side) and the
+// conversation pane (#main) are all direct children of one flex root. The sidebar
+// column is the root's child that contains #side.
+function findSidebarFromStructure() {
+  const chatList = document.querySelector(CHAT_LIST_SELECTOR);
+  if (!(chatList instanceof HTMLElement)) {
+    return null;
+  }
 
-function findSidebarFromKnownSelector() {
-  return findTopmostLikelySidebar(document.querySelector(KNOWN_SIDEBAR_SELECTOR));
+  const layoutRoot = findNavRail()?.parentElement;
+  if (layoutRoot instanceof HTMLElement && layoutRoot.contains(chatList)) {
+    let column = chatList;
+    while (column.parentElement && column.parentElement !== layoutRoot) {
+      column = column.parentElement;
+    }
+    return column;
+  }
+
+  // Nav rail not found: climb from the chat list to the widest sidebar-shaped
+  // ancestor (stops before reaching the full-width layout root).
+  return findTopmostLikelySidebar(chatList);
 }
 
 function findSidebarFallback() {
@@ -135,7 +156,7 @@ function findSidebarFallback() {
 }
 
 function findSidebar() {
-  return findSidebarFromAnchor() || findSidebarFromKnownSelector() || findSidebarFallback();
+  return findSidebarFromStructure() || findSidebarFallback();
 }
 
 function shouldHideSibling(element, sidebarRect) {
@@ -168,6 +189,13 @@ function collectSidebarTargets() {
 
   const sidebarRect = sidebar.getBoundingClientRect();
   const targets = [sidebar];
+
+  // Status, Channels, Settings, etc. render in a separate overlay drawer that sits
+  // on top of the sidebar column, so hide it too.
+  const leftDrawer = document.querySelector(LEFT_DRAWER_SELECTOR);
+  if (leftDrawer instanceof HTMLElement && leftDrawer !== sidebar) {
+    targets.push(leftDrawer);
+  }
 
   if (shouldHideSibling(sidebar.previousElementSibling, sidebarRect)) {
     targets.push(sidebar.previousElementSibling);
