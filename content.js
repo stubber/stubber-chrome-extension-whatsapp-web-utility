@@ -1,5 +1,4 @@
 const TOGGLE_ID = "stubber-whatsapp-sidebar-toggle";
-const TOGGLE_HOST_ID = "stubber-whatsapp-sidebar-toggle-host";
 const HIDDEN_ATTR = "data-stubber-sidebar-hidden";
 const PREV_STYLE_ATTR = "data-stubber-prev-style";
 
@@ -8,15 +7,13 @@ const PREV_STYLE_ATTR = "data-stubber-prev-style";
 const CHAT_LIST_SELECTOR = "#side, #pane-side";
 const LEFT_DRAWER_SELECTOR = "[data-testid='drawer-left']";
 const NAV_ITEM_SELECTOR = "[data-navbar-item]";
+const NAV_PRIMARY_SECTION_SELECTOR = "[data-testid='navbar-primary-section']";
 
 const state = {
   sidebarHidden: false,
   syncScheduled: false,
+  toggleItem: null,
 };
-
-function normalizeLabel(value) {
-  return (value || "").trim().toLowerCase();
-}
 
 // The vertical nav rail on the far left (Chats, Calls, Status, ...). It is a
 // header[data-testid='chatlist-header'], but so is the "WhatsApp" title bar inside
@@ -27,49 +24,45 @@ function findNavRail() {
   return rail instanceof HTMLElement ? rail : null;
 }
 
-function findChatListHeader() {
-  const rail = findNavRail();
-  if (rail) {
-    return rail;
+// Each nav icon is wrapped as item > span > div > button[data-navbar-item]. Returns
+// the elements from the item wrapper (a direct child of the nav list) down to the
+// button.
+function getNavItemChain(button, buttons) {
+  const other = button === buttons[0] ? buttons[1] : buttons[0];
+  const chain = [button];
+  let item = button;
+  while (item.parentElement && !item.parentElement.contains(other)) {
+    item = item.parentElement;
+    chain.unshift(item);
   }
-
-  const header = document.querySelector("header[data-testid='chatlist-header']");
-  return header instanceof HTMLElement ? header : null;
+  return chain;
 }
 
-function findChatsButton() {
-  const header = findChatListHeader();
-  const scopedButton = header?.querySelector("button[aria-label='Chats']");
-  if (scopedButton instanceof HTMLButtonElement) {
-    return scopedButton;
+// Finds where to put the toggle and which native icons to copy styling from.
+// - anchorItem: the last icon in the top group (currently Meta AI); the toggle goes
+//   directly beneath it.
+// - styleChain: an unselected single-colour icon (Calls, Status, ...). Meta AI is
+//   multi-coloured and its button has no icon colour, so it is skipped.
+// - activeButtonClass: the selected icon's button classes, used while chats are
+//   hidden so the toggle reads as "on".
+function findNavReferences() {
+  const section = document.querySelector(NAV_PRIMARY_SECTION_SELECTOR);
+  const buttons = Array.from(section?.querySelectorAll(NAV_ITEM_SELECTOR) || []);
+  if (buttons.length < 2) {
+    return null;
   }
 
-  const exactMatch = document.querySelector("button[aria-label='Chats']");
-  if (exactMatch instanceof HTMLButtonElement) {
-    return exactMatch;
-  }
+  const isSelected = (button) => button.getAttribute("data-navbar-item-selected") === "true";
+  const lastButton = buttons[buttons.length - 1];
+  const styleButton =
+    buttons.find((button) => button !== lastButton && !isSelected(button)) || lastButton;
+  const activeButton = buttons.find(isSelected);
 
-  return Array.from(document.querySelectorAll("button[aria-label]")).find((element) => {
-    const label = normalizeLabel(element.getAttribute("aria-label"));
-    return label === "chats" || label === "chat list";
-  });
-}
-
-function findSecondaryHeaderButton() {
-  const header = findChatListHeader();
-  const preferredLabels = ["media", "you"];
-
-  for (const label of preferredLabels) {
-    const button = Array.from(header?.querySelectorAll("button[aria-label]") || []).find(
-      (element) => normalizeLabel(element.getAttribute("aria-label")) === label,
-    );
-
-    if (button instanceof HTMLButtonElement) {
-      return button;
-    }
-  }
-
-  return null;
+  return {
+    anchorItem: getNavItemChain(lastButton, buttons)[0],
+    styleChain: getNavItemChain(styleButton, buttons),
+    activeButtonClass: activeButton?.className || styleButton.className,
+  };
 }
 
 function isLikelySidebar(element) {
@@ -248,34 +241,29 @@ function applySidebarState() {
   collectSidebarTargets().forEach(hideElement);
 }
 
-function createToggleButton() {
-  const button = document.createElement("button");
+// Builds a nav item that mirrors WhatsApp's own wrapper structure and classes
+// (item > span > div > button) so it lines up and styles like the native icons.
+function createToggleItem({ styleChain, activeButtonClass }) {
+  const elements = styleChain.map((reference) => {
+    const element = document.createElement(reference.tagName.toLowerCase());
+    element.className = reference.className;
+    return element;
+  });
+
+  for (let index = 1; index < elements.length; index += 1) {
+    elements[index - 1].appendChild(elements[index]);
+  }
+
+  const button = elements[elements.length - 1];
+  button.dataset.stubberIdleClass = button.className;
+  button.dataset.stubberActiveClass = activeButtonClass;
   button.id = TOGGLE_ID;
   button.type = "button";
-  button.style.display = "inline-flex";
+  button.style.display = "flex";
   button.style.alignItems = "center";
   button.style.justifyContent = "center";
-  button.style.width = "32px";
-  button.style.height = "32px";
-  button.style.padding = "0";
-  button.style.margin = "0 8px 0 0";
-  button.style.border = "none";
-  button.style.borderRadius = "999px";
-  button.style.background = "transparent";
-  button.style.color = "inherit";
   button.style.cursor = "pointer";
-  button.style.opacity = "0.8";
-  button.style.flex = "0 0 auto";
-
-  button.addEventListener("mouseenter", () => {
-    button.style.background = "rgba(255, 255, 255, 0.08)";
-    button.style.opacity = "1";
-  });
-
-  button.addEventListener("mouseleave", () => {
-    button.style.background = "transparent";
-    button.style.opacity = state.sidebarHidden ? "1" : "0.8";
-  });
+  button.innerHTML = TOGGLE_ICON_SVG;
 
   button.addEventListener("click", () => {
     state.sidebarHidden = !state.sidebarHidden;
@@ -284,100 +272,45 @@ function createToggleButton() {
   });
 
   updateButtonLabel(button);
-  return button;
+  return elements[0];
 }
 
-function createToggleHost() {
-  const host = document.createElement("div");
-  host.id = TOGGLE_HOST_ID;
-  host.style.position = "absolute";
-  host.style.top = "50%";
-  host.style.transform = "translateY(-50%)";
-  host.style.zIndex = "2";
-  host.style.display = "flex";
-  host.style.alignItems = "center";
-  host.style.justifyContent = "center";
-  host.style.width = "32px";
-  host.style.height = "32px";
-  host.style.pointerEvents = "none";
-  return host;
-}
-
+// Only touches attributes: rewriting the button's content here would trigger the
+// MutationObserver, re-run sync every frame and swallow real mouse clicks.
 function updateButtonLabel(button) {
   const label = state.sidebarHidden ? "Show chats" : "Hide chats";
   button.setAttribute("aria-label", label);
   button.setAttribute("title", label);
-  button.style.opacity = state.sidebarHidden ? "1" : "0.8";
-  button.innerHTML = `
-    <svg width="18" height="18" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512" fill="currentColor" aria-hidden="true">
+  button.setAttribute("aria-pressed", String(state.sidebarHidden));
+  const className = state.sidebarHidden
+    ? button.dataset.stubberActiveClass
+    : button.dataset.stubberIdleClass;
+  if (className) {
+    button.className = className;
+  }
+}
+
+const TOGGLE_ICON_SVG = `
+    <svg width="22" height="22" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512" fill="currentColor" aria-hidden="true">
       <path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zm151 118.3C226 97.7 269.5 80 320 80c65.2 0 118.8 29.6 159.9 67.7C518.4 183.5 545 226 558.6 256c-12.6 28-36.6 66.8-70.9 100.9l-53.8-42.2c9.1-17.6 14.2-37.5 14.2-58.7c0-70.7-57.3-128-128-128c-32.2 0-61.7 11.9-84.2 31.5l-46.1-36.1zM394.9 284.2l-81.5-63.9c4.2-8.5 6.6-18.2 6.6-28.3c0-5.5-.7-10.9-2-16c.7 0 1.3 0 2 0c44.2 0 80 35.8 80 80c0 9.9-1.8 19.4-5.1 28.2zm51.3 163.3l-41.9-33C378.8 425.4 350.7 432 320 432c-65.2 0-118.8-29.6-159.9-67.7C121.6 328.5 95 286 81.4 256c8.3-18.4 21.5-41.5 39.4-64.8L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5zm-88-69.3L302 334c-23.5-5.4-43.1-21.2-53.7-42.3l-56.1-44.2c-.2 2.8-.3 5.6-.3 8.5c0 70.7 57.3 128 128 128c13.3 0 26.1-2 38.2-5.8z"/>
     </svg>
   `;
-}
 
-function syncToggleButtonPresentation(button, referenceButton) {
-  if (referenceButton instanceof HTMLButtonElement && referenceButton.className) {
-    button.className = referenceButton.className;
-  }
-
-  button.removeAttribute("data-navbar-item");
-  button.removeAttribute("data-navbar-item-index");
-  button.removeAttribute("data-navbar-item-selected");
-  button.style.display = "inline-flex";
-  button.style.alignItems = "center";
-  button.style.justifyContent = "center";
-  button.style.width = "32px";
-  button.style.height = "32px";
-  button.style.padding = "0";
-  button.style.margin = "0 8px 0 0";
-  button.style.border = "none";
-  button.style.borderRadius = "999px";
-  button.style.background = "transparent";
-  button.style.color = "inherit";
-  button.style.cursor = "pointer";
-  button.style.flex = "0 0 auto";
-  button.style.pointerEvents = "auto";
-}
-
+// Places the toggle directly beneath the last icon in the nav rail's top group
+// (Meta AI). Does nothing when it is already in place, so syncs stay cheap.
 function ensureToggleButton() {
-  const header = findChatListHeader();
-  const referenceButton = findSecondaryHeaderButton() || findChatsButton();
-  if (!(header instanceof HTMLElement) || !(referenceButton instanceof HTMLButtonElement)) {
+  const references = findNavReferences();
+  if (!references) {
     return;
   }
 
-  if (window.getComputedStyle(header).position === "static") {
-    header.style.position = "relative";
+  if (!state.toggleItem) {
+    state.toggleItem = createToggleItem(references);
   }
 
-  let host = document.getElementById(TOGGLE_HOST_ID);
-  if (!(host instanceof HTMLDivElement)) {
-    host = createToggleHost();
+  if (references.anchorItem.nextElementSibling !== state.toggleItem) {
+    references.anchorItem.after(state.toggleItem);
   }
-
-  let button = document.getElementById(TOGGLE_ID);
-  if (!(button instanceof HTMLButtonElement)) {
-    button = createToggleButton();
-  }
-
-  syncToggleButtonPresentation(button, referenceButton);
-  updateButtonLabel(button);
-
-  if (button.parentElement !== host) {
-    host.replaceChildren(button);
-  }
-
-  if (host.parentElement !== header) {
-    header.appendChild(host);
-  }
-
-  const headerRect = header.getBoundingClientRect();
-  const referenceRect = referenceButton.getBoundingClientRect();
-  const preferredLeft = referenceRect.left - headerRect.left - 40;
-  const minLeft = 8;
-  const maxLeft = Math.max(minLeft, headerRect.width - 40);
-  const clampedLeft = Math.min(Math.max(preferredLeft, minLeft), maxLeft);
-  host.style.left = `${clampedLeft}px`;
 }
 
 function sync() {
